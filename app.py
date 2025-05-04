@@ -6,8 +6,7 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from flask_cors import CORS
 # Import our image processing module
 from image_processor import process_zip_file, process_individual_images
 
@@ -19,14 +18,8 @@ logging.basicConfig(
 
 # Create Flask app
 app = Flask(__name__)
-# Allow all origins (development only)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["https://image-description-generator.onrender.com/"],  # Change to your frontend URL in production
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Configure upload settings
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'image_descriptions')

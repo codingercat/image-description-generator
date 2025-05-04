@@ -14,3 +14,4 @@ uvicorn[standard]
 python-multipart
 transformers
 torch
+flask-cors
