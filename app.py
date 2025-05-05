@@ -6,7 +6,6 @@ from pathlib import Path
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-from flask_cors import CORS
 # Import our image processing module
 from image_processor import process_zip_file, process_individual_images
 
@@ -19,7 +18,8 @@ logging.basicConfig(
 # Create Flask app
 app = Flask(__name__)
 
-CORS(app, origins=["http://localhost:5173", "https://image-description-generator.onrender.com"])
+# Configure CORS properly - this is the key fix
+CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://image-description-generator.onrender.com"]}})
 
 # Configure upload settings
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'image_descriptions')
