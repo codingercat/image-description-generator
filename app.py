@@ -21,8 +21,21 @@ logging.basicConfig(
 # Create Flask app
 app = Flask(__name__)
 
-# Configure CORS properly - this is the key fix
-CORS(app, resources={r"/*": {"origins": ["http://localhost:5173", "https://image-description-generator.onrender.com"]}})
+# Configure CORS - Updated for better compatibility
+CORS(app, 
+     supports_credentials=True,
+     origins=["http://localhost:5173", "https://image-description-generator.onrender.com", "*"],
+     allow_headers=["Content-Type", "Authorization", "Access-Control-Allow-Origin"],
+     expose_headers=["Content-Disposition"],
+     methods=["GET", "POST", "OPTIONS"])
+
+# Alternative CORS configuration if the above doesn't work
+@app.after_request
+def after_request(response):
+    response.headers.add('Access-Control-Allow-Origin', '*')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    return response
 
 # Configure upload settings
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'image_descriptions')
@@ -44,12 +57,16 @@ def health_check():
     """Simple health check endpoint."""
     return jsonify({'status': 'healthy'})
 
-@app.route('/generate-descriptions', methods=['POST'])
+@app.route('/generate-descriptions', methods=['POST', 'OPTIONS'])
 def generate_descriptions():
     """
     API endpoint to generate descriptions for images.
     Accepts a zip file or individual image files along with subject and audience parameters.
     """
+    # Handle OPTIONS request for CORS preflight
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     # Check if OPENAI_API_KEY is set
     if not os.getenv('OPENAI_API_KEY'):
         return jsonify({
