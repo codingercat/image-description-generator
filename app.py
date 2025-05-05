@@ -19,7 +19,7 @@ logging.basicConfig(
 # Create Flask app
 app = Flask(__name__)
 
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, origins=["http://localhost:5173", "https://image-description-generator.onrender.com"])
 
 # Configure upload settings
 UPLOAD_FOLDER = os.path.join(tempfile.gettempdir(), 'image_descriptions')
@@ -41,7 +41,7 @@ def health_check():
     """Simple health check endpoint."""
     return jsonify({'status': 'healthy'})
 
-@app.route('/api/generate-descriptions', methods=['POST'])
+@app.route('/generate-descriptions', methods=['POST'])
 def generate_descriptions():
     """
     API endpoint to generate descriptions for images.
@@ -122,7 +122,7 @@ def generate_descriptions():
             'error': f'Error processing files: {str(e)}'
         }), 500
 
-@app.route('/api/download/<job_id>', methods=['GET'])
+@app.route('/download/<job_id>', methods=['GET'])
 def download_results(job_id):
     """Download the Excel file with generated descriptions."""
     try:
@@ -152,7 +152,7 @@ def download_results(job_id):
             'error': f'Error downloading file: {str(e)}'
         }), 500
 
-@app.route('/api/jobs/<job_id>', methods=['GET'])
+@app.route('/jobs/<job_id>', methods=['GET'])
 def get_job_status(job_id):
     """Check status of a processing job."""
     try:
