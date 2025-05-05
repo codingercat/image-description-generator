@@ -21,8 +21,8 @@ logging.basicConfig(
 # Create Flask app
 app = Flask(__name__)
 
-# Simplified CORS configuration - allow all origins
-CORS(app)
+# Enhanced CORS configuration - explicitly allow your frontend origin
+CORS(app, resources={r"/*": {"origins": "*", "allow_headers": ["Content-Type", "Authorization"], "methods": ["GET", "POST", "OPTIONS"]}})
 
 # Ensure CORS headers are properly set on all responses
 @app.after_request
@@ -60,7 +60,11 @@ def generate_descriptions():
     """
     # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
-        return '', 200
+        response = app.make_default_options_response()
+        response.headers.add('Access-Control-Allow-Origin', '*')
+        response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+        response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE')
+        return response
         
     # Check if OPENAI_API_KEY is set
     if not os.getenv('OPENAI_API_KEY'):

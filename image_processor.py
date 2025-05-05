@@ -7,6 +7,7 @@ from PIL import Image
 import requests
 import json
 import base64
+import time
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -28,7 +29,7 @@ def extract_zip(zip_path, extract_dir):
     
     return image_files
 
-def generate_image_description(image_path, subject, audience):
+def generate_image_description(image_path, subject, audience, max_retries=3):
     """
     Generate a description for an image using OpenAI's API.
     
@@ -36,81 +37,122 @@ def generate_image_description(image_path, subject, audience):
         image_path: Path to the image file
         subject: The subject area (e.g., Mathematics, Biology)
         audience: The target audience (e.g., Elementary school students)
+        max_retries: Maximum number of retries on API failure
         
     Returns:
         A description of the image contextual to the subject and audience
     """
-    try:
-        # Get basic image info
-        with Image.open(image_path) as img:
-            width, height = img.size
-            format_name = img.format
-            
-        # Prepare a message for OpenAI API
-        # First, encode the image to base64
-        def encode_image(image_path):
-            with open(image_path, "rb") as image_file:
-                return base64.b64encode(image_file.read()).decode('utf-8')
+    retry_count = 0
+    backoff_time = 2  # Initial backoff time in seconds
+    
+    while retry_count < max_retries:
+        try:
+            # Get basic image info
+            with Image.open(image_path) as img:
+                width, height = img.size
+                format_name = img.format
                 
-        base64_image = encode_image(image_path)
-        
-        # Direct API call without using the client library
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OpenAI API key not found in environment variables")
+                # If image is too large, resize it to reduce API payload
+                if width * height > 4000000:  # 4 million pixels
+                    # Calculate new dimensions
+                    factor = (width * height / 4000000) ** 0.5
+                    new_width = int(width / factor)
+                    new_height = int(height / factor)
+                    img = img.resize((new_width, new_height))
+                    
+                    # Save to a temporary file
+                    temp_path = f"{image_path}_resized.jpg"
+                    img.save(temp_path, format="JPEG", quality=85)
+                    image_path_to_use = temp_path
+                    format_name = "JPEG"
+                else:
+                    image_path_to_use = image_path
             
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {api_key}"
-        }
-        
-        payload = {
-            "model": "gpt-4o",
-            "messages": [
-                {
-                    "role": "system", 
-                    "content": f"You are a VI educator, expert at describing images for {audience} (blind students) studying {subject}. "
-                               f"Provide clear, detailed, and educational descriptions that focus on aspects "
-                               f"relevant to {subject}. Keep descriptions between 100-150 words. "
-                               f"Be factual, educational, and appropriate for the audience level."
-                },
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": f"Please describe this image for {audience} (blind students) studying {subject}."},
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": f"data:image/{format_name.lower()};base64,{base64_image}"
+            # Prepare a message for OpenAI API
+            # First, encode the image to base64
+            def encode_image(image_path):
+                with open(image_path, "rb") as image_file:
+                    return base64.b64encode(image_file.read()).decode('utf-8')
+                    
+            base64_image = encode_image(image_path_to_use)
+            
+            # Direct API call without using the client library
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OpenAI API key not found in environment variables")
+                
+            headers = {
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {api_key}"
+            }
+            
+            payload = {
+                "model": "gpt-4o",
+                "messages": [
+                    {
+                        "role": "system", 
+                        "content": f"You are a VI educator, expert at describing images for {audience} (blind students) studying {subject}. "
+                                  f"Provide clear, detailed, and educational descriptions that focus on aspects "
+                                  f"relevant to {subject}. Keep descriptions between 100-150 words. "
+                                  f"Be factual, educational, and appropriate for the audience level."
+                    },
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": f"Please describe this image for {audience} (blind students) studying {subject}."},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/{format_name.lower()};base64,{base64_image}"
+                                }
                             }
-                        }
-                    ]
-                }
-            ],
-            "max_tokens": 300
-        }
-        
-        response = requests.post(
-            "https://api.openai.com/v1/chat/completions",
-            headers=headers,
-            json=payload
-        )
-        
-        response_data = response.json()
-        
-        if 'error' in response_data:
-            raise ValueError(f"API Error: {response_data['error']['message']}")
+                        ]
+                    }
+                ],
+                "max_tokens": 300,
+                "timeout": 60  # Set a reasonable timeout for the API request
+            }
             
-        # Extract and return the description
-        description = response_data['choices'][0]['message']['content']
-        logging.info(f"Generated description for {os.path.basename(image_path)}")
-        return description
-        
-    except Exception as e:
-        logging.error(f"Error generating description for {image_path}: {str(e)}")
-        return f"Error generating description: {str(e)}"
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=60  # Set request timeout
+            )
+            
+            response_data = response.json()
+            
+            if 'error' in response_data:
+                raise ValueError(f"API Error: {response_data['error']['message']}")
+                
+            # Extract and return the description
+            description = response_data['choices'][0]['message']['content']
+            logging.info(f"Generated description for {os.path.basename(image_path)}")
+            
+            # Clean up temporary file if we created one
+            if 'temp_path' in locals() and os.path.exists(temp_path):
+                os.remove(temp_path)
+                
+            return description
+            
+        except Exception as e:
+            retry_count += 1
+            logging.warning(f"Attempt {retry_count}/{max_retries} failed for {image_path}: {str(e)}")
+            
+            if retry_count < max_retries:
+                logging.info(f"Retrying in {backoff_time} seconds...")
+                time.sleep(backoff_time)
+                backoff_time *= 2  # Exponential backoff
+            else:
+                logging.error(f"Failed to generate description after {max_retries} attempts: {str(e)}")
+                
+                # Clean up temporary file if we created one
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    
+                return f"Error generating description after {max_retries} attempts: {str(e)}"
 
-def process_individual_images(image_paths, output_dir, subject, audience):
+def process_individual_images(image_paths, output_dir, subject, audience, batch_size=5):
     """
     Process a list of individual image files.
     
@@ -119,6 +161,7 @@ def process_individual_images(image_paths, output_dir, subject, audience):
         output_dir: Directory to save results
         subject: Subject area for context
         audience: Target audience for descriptions
+        batch_size: Number of images to process in a batch before saving progress
         
     Returns:
         Dictionary with processing results
@@ -128,14 +171,22 @@ def process_individual_images(image_paths, output_dir, subject, audience):
     
     logging.info(f"Processing {len(image_paths)} individual images")
     
-    for image_path in image_paths:
+    # Save progress periodically to avoid losing work on timeout
+    excel_file = os.path.join(output_dir, "descriptions.xlsx")
+    
+    for i, image_path in enumerate(image_paths):
         try:
             filename = os.path.basename(image_path)
             
             # Get image dimensions
-            with Image.open(image_path) as img:
-                width, height = img.size
-                format_name = img.format
+            try:
+                with Image.open(image_path) as img:
+                    width, height = img.size
+                    format_name = img.format
+            except Exception as img_error:
+                logging.error(f"Error reading image {image_path}: {str(img_error)}")
+                width, height = 0, 0
+                format_name = "Error"
             
             # Generate the description
             description = generate_image_description(image_path, subject, audience)
@@ -154,6 +205,12 @@ def process_individual_images(image_paths, output_dir, subject, audience):
             
             total_images += 1
             
+            # Save progress after each batch
+            if (i + 1) % batch_size == 0 or i == len(image_paths) - 1:
+                df = pd.DataFrame(results)
+                df.to_excel(excel_file, index=False)
+                logging.info(f"Progress saved: {i+1}/{len(image_paths)} images processed")
+            
         except Exception as e:
             logging.error(f"Error processing {image_path}: {str(e)}")
             results.append({
@@ -166,9 +223,12 @@ def process_individual_images(image_paths, output_dir, subject, audience):
                 "Description": f"Error: {str(e)}",
                 "Generated At": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             })
+            
+            # Save progress after error
+            df = pd.DataFrame(results)
+            df.to_excel(excel_file, index=False)
     
-    # Save results to Excel
-    excel_file = os.path.join(output_dir, "descriptions.xlsx")
+    # Final save
     df = pd.DataFrame(results)
     df.to_excel(excel_file, index=False)
     
