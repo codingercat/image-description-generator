@@ -86,6 +86,7 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 "Authorization": f"Bearer {api_key}"
             }
             
+            # CORRECTED: Removed the invalid 'timeout' parameter from payload
             payload = {
                 "model": "gpt-4o",
                 "messages": [
@@ -109,10 +110,10 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                         ]
                     }
                 ],
-                "max_tokens": 300,
-                "timeout": 60  # Set a reasonable timeout for the API request
+                "max_tokens": 300
             }
             
+            # Set timeout in the request, not in the payload
             response = requests.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers=headers,
