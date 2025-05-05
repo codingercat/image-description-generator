@@ -21,20 +21,15 @@ logging.basicConfig(
 # Create Flask app
 app = Flask(__name__)
 
-# Configure CORS - Updated for better compatibility
-CORS(app, 
-     supports_credentials=True,
-     origins=["http://localhost:5173", "https://image-description-generator.onrender.com", "*"],
-     allow_headers=["Content-Type", "Authorization", "Access-Control-Allow-Origin"],
-     expose_headers=["Content-Disposition"],
-     methods=["GET", "POST", "OPTIONS"])
+# Simplified CORS configuration - allow all origins
+CORS(app)
 
-# Alternative CORS configuration if the above doesn't work
+# Ensure CORS headers are properly set on all responses
 @app.after_request
 def after_request(response):
     response.headers.add('Access-Control-Allow-Origin', '*')
-    response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization')
-    response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
+    response.headers.add('Access-Control-Allow-Headers', 'Content-Type, Authorization')
+    response.headers.add('Access-Control-Allow-Methods', 'GET, POST, OPTIONS, PUT, DELETE')
     return response
 
 # Configure upload settings
@@ -63,7 +58,7 @@ def generate_descriptions():
     API endpoint to generate descriptions for images.
     Accepts a zip file or individual image files along with subject and audience parameters.
     """
-    # Handle OPTIONS request for CORS preflight
+    # Handle OPTIONS preflight request
     if request.method == 'OPTIONS':
         return '', 200
         
