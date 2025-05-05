@@ -4,7 +4,7 @@ import pandas as pd
 import logging
 from datetime import datetime
 from PIL import Image
-import openai
+from openai import OpenAI  # Updated import statement
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -51,14 +51,16 @@ def generate_image_description(image_path, subject, audience):
                 
         base64_image = encode_image(image_path)
         
-        # Create the messages payload
-        client = openai.OpenAI()
+        # Create the client with correct initialization
+        # This is the key fix - proper initialization of the OpenAI client
+        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        
         response = client.chat.completions.create(
-            model="gpt-4-vision-preview",
+            model="gpt-4o",
             messages=[
                 {
                     "role": "system", 
-                    "content": f"You are an expert at describing images for {audience} studying {subject}. "
+                    "content": f"You are a VI educator, expert at describing images for {audience} (blind students) studying {subject}. "
                                f"Provide clear, detailed, and educational descriptions that focus on aspects "
                                f"relevant to {subject}. Keep descriptions between 100-150 words. "
                                f"Be factual, educational, and appropriate for the audience level."
@@ -66,7 +68,7 @@ def generate_image_description(image_path, subject, audience):
                 {
                     "role": "user",
                     "content": [
-                        {"type": "text", "text": f"Please describe this image for {audience} studying {subject}."},
+                        {"type": "text", "text": f"Please describe this image for {audience} (blind students) studying {subject}."},
                         {
                             "type": "image_url",
                             "image_url": {
