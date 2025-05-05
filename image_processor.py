@@ -4,7 +4,12 @@ import pandas as pd
 import logging
 from datetime import datetime
 from PIL import Image
-from openai import OpenAI  # Updated import statement
+import requests
+import json
+import base64
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -43,21 +48,25 @@ def generate_image_description(image_path, subject, audience):
             
         # Prepare a message for OpenAI API
         # First, encode the image to base64
-        import base64
-        
         def encode_image(image_path):
             with open(image_path, "rb") as image_file:
                 return base64.b64encode(image_file.read()).decode('utf-8')
                 
         base64_image = encode_image(image_path)
         
-        # Create the client with correct initialization
-        # This is the key fix - proper initialization of the OpenAI client
-        client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        # Direct API call without using the client library
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OpenAI API key not found in environment variables")
+            
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
         
-        response = client.chat.completions.create(
-            model="gpt-4o",
-            messages=[
+        payload = {
+            "model": "gpt-4o",
+            "messages": [
                 {
                     "role": "system", 
                     "content": f"You are a VI educator, expert at describing images for {audience} (blind students) studying {subject}. "
@@ -78,11 +87,22 @@ def generate_image_description(image_path, subject, audience):
                     ]
                 }
             ],
-            max_tokens=300
+            "max_tokens": 300
+        }
+        
+        response = requests.post(
+            "https://api.openai.com/v1/chat/completions",
+            headers=headers,
+            json=payload
         )
         
+        response_data = response.json()
+        
+        if 'error' in response_data:
+            raise ValueError(f"API Error: {response_data['error']['message']}")
+            
         # Extract and return the description
-        description = response.choices[0].message.content
+        description = response_data['choices'][0]['message']['content']
         logging.info(f"Generated description for {os.path.basename(image_path)}")
         return description
         

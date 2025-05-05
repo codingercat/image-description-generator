@@ -8,6 +8,9 @@ from flask_cors import CORS
 from werkzeug.utils import secure_filename
 # Import our image processing module
 from image_processor import process_zip_file, process_individual_images
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -48,7 +51,7 @@ def generate_descriptions():
     Accepts a zip file or individual image files along with subject and audience parameters.
     """
     # Check if OPENAI_API_KEY is set
-    if not os.environ.get('OPENAI_API_KEY'):
+    if not os.getenv('OPENAI_API_KEY'):
         return jsonify({
             'error': 'OpenAI API key is not configured. Please set the OPENAI_API_KEY environment variable.'
         }), 500
