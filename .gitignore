@@ -41,3 +41,11 @@ temp/
 # Logs
 *.log
 logs/
+
+*.zip
+*.xlsx
+*.csv
+*.mp4
+*.exe
+*.pyc
+__pycache__/
