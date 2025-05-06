@@ -29,6 +29,8 @@ def extract_zip(zip_path, extract_dir):
     
     return image_files
 
+# Function to improve in image_processor.py
+
 def generate_image_description(image_path, subject, audience, max_retries=3):
     """
     Generate a description for an image using OpenAI's API.
@@ -47,14 +49,13 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
     
     while retry_count < max_retries:
         try:
-            # Get basic image info
+            # Get basic image info and prepare image
             with Image.open(image_path) as img:
                 width, height = img.size
                 format_name = img.format
                 
                 # If image is too large, resize it to reduce API payload
                 if width * height > 4000000:  # 4 million pixels
-                    # Calculate new dimensions
                     factor = (width * height / 4000000) ** 0.5
                     new_width = int(width / factor)
                     new_height = int(height / factor)
@@ -68,15 +69,14 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 else:
                     image_path_to_use = image_path
             
-            # Prepare a message for OpenAI API
-            # First, encode the image to base64
+            # Encode the image to base64
             def encode_image(image_path):
                 with open(image_path, "rb") as image_file:
                     return base64.b64encode(image_file.read()).decode('utf-8')
                     
             base64_image = encode_image(image_path_to_use)
             
-            # Direct API call without using the client library
+            # Get API key from environment
             api_key = os.getenv("OPENAI_API_KEY")
             if not api_key:
                 raise ValueError("OpenAI API key not found in environment variables")
@@ -86,7 +86,7 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 "Authorization": f"Bearer {api_key}"
             }
             
-            # CORRECTED: Removed the invalid 'timeout' parameter from payload
+            # Prepare payload for GPT-4 Vision API
             payload = {
                 "model": "gpt-4o",
                 "messages": [
@@ -113,28 +113,42 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 "max_tokens": 300
             }
             
-            # Set timeout in the request, not in the payload
-            response = requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers=headers,
-                json=payload,
-                timeout=60  # Set request timeout
-            )
-            
-            response_data = response.json()
-            
-            if 'error' in response_data:
-                raise ValueError(f"API Error: {response_data['error']['message']}")
+            # Make the API request with proper error handling and timeout
+            try:
+                response = requests.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers=headers,
+                    json=payload,
+                    timeout=90  # Increased timeout for image processing
+                )
                 
-            # Extract and return the description
-            description = response_data['choices'][0]['message']['content']
-            logging.info(f"Generated description for {os.path.basename(image_path)}")
-            
-            # Clean up temporary file if we created one
-            if 'temp_path' in locals() and os.path.exists(temp_path):
-                os.remove(temp_path)
+                # Check if the response status code indicates success
+                response.raise_for_status()
                 
-            return description
+                # Parse the response JSON
+                response_data = response.json()
+                
+                if 'error' in response_data:
+                    raise ValueError(f"API Error: {response_data['error']['message']}")
+                    
+                # Extract and return the description
+                description = response_data['choices'][0]['message']['content']
+                logging.info(f"Generated description for {os.path.basename(image_path)}")
+                
+                # Clean up temporary file if we created one
+                if 'temp_path' in locals() and os.path.exists(temp_path):
+                    os.remove(temp_path)
+                    
+                return description
+                
+            except requests.exceptions.HTTPError as http_err:
+                raise ValueError(f"HTTP Error: {http_err}")
+            except requests.exceptions.ConnectionError:
+                raise ValueError("Connection Error: Could not connect to OpenAI API")
+            except requests.exceptions.Timeout:
+                raise ValueError("Timeout Error: The request to OpenAI API timed out")
+            except requests.exceptions.RequestException as req_err:
+                raise ValueError(f"Request Error: {req_err}")
             
         except Exception as e:
             retry_count += 1

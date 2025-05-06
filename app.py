@@ -21,8 +21,8 @@ logging.basicConfig(
 # Create Flask app
 app = Flask(__name__)
 
-# Enhanced CORS configuration - explicitly allow your frontend origin
-CORS(app, resources={r"/*": {"origins": "*", "allow_headers": ["Content-Type", "Authorization"], "methods": ["GET", "POST", "OPTIONS"]}})
+# Configure CORS to allow requests from any origin
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Ensure CORS headers are properly set on all responses
 @app.after_request
