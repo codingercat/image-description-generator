@@ -24,6 +24,10 @@ app = Flask(__name__)
 # Configure CORS to allow requests from any origin
 CORS(app, resources={r"/*": {"origins": "*"}})
 
+@app.route('/', methods=['GET'])
+def index():
+    return 'Flask app is running!'
+
 # Ensure CORS headers are properly set on all responses
 @app.after_request
 def after_request(response):
@@ -204,6 +208,4 @@ def get_job_status(job_id):
         }), 500
 
 if __name__ == '__main__':
-    # Run the Flask app in development mode
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=True)
+    app.run(debug=True, host='0.0.0.0', port=5000)
