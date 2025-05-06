@@ -2,6 +2,8 @@ import os
 import zipfile
 import pandas as pd
 import logging
+import gc
+import traceback
 from datetime import datetime
 from PIL import Image
 import requests
@@ -29,8 +31,6 @@ def extract_zip(zip_path, extract_dir):
     
     return image_files
 
-# Function to improve in image_processor.py
-
 def generate_image_description(image_path, subject, audience, max_retries=3):
     """
     Generate a description for an image using OpenAI's API.
@@ -46,35 +46,55 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
     """
     retry_count = 0
     backoff_time = 2  # Initial backoff time in seconds
+    temp_path = None
     
     while retry_count < max_retries:
         try:
             # Get basic image info and prepare image
-            with Image.open(image_path) as img:
+            img = None
+            try:
+                img = Image.open(image_path)
                 width, height = img.size
                 format_name = img.format
                 
-                # If image is too large, resize it to reduce API payload
+                # If image is too large, resize it to reduce API payload and memory usage
                 if width * height > 4000000:  # 4 million pixels
                     factor = (width * height / 4000000) ** 0.5
                     new_width = int(width / factor)
                     new_height = int(height / factor)
-                    img = img.resize((new_width, new_height))
+                    
+                    # Create a new image instead of modifying the original to avoid memory issues
+                    resized_img = img.resize((new_width, new_height))
+                    img.close()
                     
                     # Save to a temporary file
-                    temp_path = f"{image_path}_resized.jpg"
-                    img.save(temp_path, format="JPEG", quality=85)
+                    temp_path = f"{os.path.splitext(image_path)[0]}_resized.jpg"
+                    resized_img.save(temp_path, format="JPEG", quality=80)
+                    resized_img.close()
+                    
                     image_path_to_use = temp_path
                     format_name = "JPEG"
                 else:
                     image_path_to_use = image_path
+                    if img:
+                        img.close()
+            except Exception as img_error:
+                if img:
+                    img.close()
+                logging.error(f"Error processing image {image_path}: {str(img_error)}")
+                raise ValueError(f"Image processing error: {str(img_error)}")
             
-            # Encode the image to base64
-            def encode_image(image_path):
-                with open(image_path, "rb") as image_file:
-                    return base64.b64encode(image_file.read()).decode('utf-8')
-                    
-            base64_image = encode_image(image_path_to_use)
+            # Encode the image to base64 with memory-efficient approach
+            base64_image = None
+            try:
+                with open(image_path_to_use, "rb") as image_file:
+                    image_data = image_file.read()
+                    base64_image = base64.b64encode(image_data).decode('utf-8')
+                    # Explicitly delete large variables to free memory
+                    del image_data
+            except Exception as encode_error:
+                logging.error(f"Error encoding image {image_path_to_use}: {str(encode_error)}")
+                raise ValueError(f"Image encoding error: {str(encode_error)}")
             
             # Get API key from environment
             api_key = os.getenv("OPENAI_API_KEY")
@@ -113,13 +133,17 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 "max_tokens": 300
             }
             
+            # Explicit cleanup of large variables
+            del base64_image
+            gc.collect()
+            
             # Make the API request with proper error handling and timeout
             try:
                 response = requests.post(
                     "https://api.openai.com/v1/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=90  # Increased timeout for image processing
+                    timeout=60  # 60 second timeout
                 )
                 
                 # Check if the response status code indicates success
@@ -136,8 +160,16 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 logging.info(f"Generated description for {os.path.basename(image_path)}")
                 
                 # Clean up temporary file if we created one
-                if 'temp_path' in locals() and os.path.exists(temp_path):
-                    os.remove(temp_path)
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception as rm_error:
+                        logging.warning(f"Failed to remove temp file {temp_path}: {str(rm_error)}")
+                
+                # Clean up response data
+                del response_data
+                del response
+                gc.collect()
                     
                 return description
                 
@@ -162,14 +194,21 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 logging.error(f"Failed to generate description after {max_retries} attempts: {str(e)}")
                 
                 # Clean up temporary file if we created one
-                if 'temp_path' in locals() and os.path.exists(temp_path):
-                    os.remove(temp_path)
+                if temp_path and os.path.exists(temp_path):
+                    try:
+                        os.remove(temp_path)
+                    except Exception:
+                        pass
                     
                 return f"Error generating description after {max_retries} attempts: {str(e)}"
+        
+        finally:
+            # Force garbage collection
+            gc.collect()
 
-def process_individual_images(image_paths, output_dir, subject, audience, batch_size=5):
+def process_individual_images(image_paths, output_dir, subject, audience, batch_size=1):
     """
-    Process a list of individual image files.
+    Process a list of individual image files with improved memory management.
     
     Args:
         image_paths: List of paths to image files
@@ -182,6 +221,7 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
         Dictionary with processing results
     """
     results = []
+    already_processed = set()
     total_images = 0
     
     logging.info(f"Processing {len(image_paths)} individual images")
@@ -189,19 +229,37 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
     # Save progress periodically to avoid losing work on timeout
     excel_file = os.path.join(output_dir, "descriptions.xlsx")
     
-    for i, image_path in enumerate(image_paths):
+    # Check if progress file exists and load it
+    if os.path.exists(excel_file):
         try:
-            filename = os.path.basename(image_path)
+            existing_df = pd.read_excel(excel_file)
+            results = existing_df.to_dict('records')
             
-            # Get image dimensions
+            # Track already processed files
+            for row in results:
+                already_processed.add(row.get("Filename", ""))
+                
+            logging.info(f"Loaded {len(results)} existing results from {excel_file}")
+        except Exception as e:
+            logging.error(f"Error loading existing progress file: {str(e)}")
+    
+    for i, image_path in enumerate(image_paths):
+        filename = os.path.basename(image_path)
+        
+        # Skip already processed images
+        if filename in already_processed:
+            logging.info(f"Skipping already processed image: {filename}")
+            continue
+            
+        try:
+            # Get image dimensions with proper cleanup
+            width, height, format_name = 0, 0, "Unknown"
             try:
                 with Image.open(image_path) as img:
                     width, height = img.size
-                    format_name = img.format
+                    format_name = img.format or "Unknown"
             except Exception as img_error:
                 logging.error(f"Error reading image {image_path}: {str(img_error)}")
-                width, height = 0, 0
-                format_name = "Error"
             
             # Generate the description
             description = generate_image_description(image_path, subject, audience)
@@ -219,17 +277,33 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
             })
             
             total_images += 1
+            already_processed.add(filename)
             
             # Save progress after each batch
             if (i + 1) % batch_size == 0 or i == len(image_paths) - 1:
-                df = pd.DataFrame(results)
-                df.to_excel(excel_file, index=False)
-                logging.info(f"Progress saved: {i+1}/{len(image_paths)} images processed")
+                # Use more memory-efficient approach to save
+                try:
+                    df = pd.DataFrame(results)
+                    df.to_excel(excel_file, index=False)
+                    logging.info(f"Progress saved: {total_images}/{len(image_paths)} images processed")
+                except Exception as save_error:
+                    logging.error(f"Error saving progress: {str(save_error)}")
+                    # Try with a different approach if above fails
+                    try:
+                        with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+                            pd.DataFrame(results).to_excel(writer, index=False)
+                    except Exception as e:
+                        logging.error(f"Critical error saving progress: {str(e)}")
+            
+            # Force garbage collection after each image
+            gc.collect()
             
         except Exception as e:
             logging.error(f"Error processing {image_path}: {str(e)}")
+            logging.error(traceback.format_exc())
+            
             results.append({
-                "Filename": os.path.basename(image_path),
+                "Filename": filename,
                 "Format": "Error",
                 "Width": 0,
                 "Height": 0,
@@ -240,12 +314,21 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
             })
             
             # Save progress after error
-            df = pd.DataFrame(results)
-            df.to_excel(excel_file, index=False)
+            try:
+                df = pd.DataFrame(results)
+                df.to_excel(excel_file, index=False)
+            except Exception as save_error:
+                logging.error(f"Error saving progress after failure: {str(save_error)}")
+            
+            # Force garbage collection after error
+            gc.collect()
     
     # Final save
-    df = pd.DataFrame(results)
-    df.to_excel(excel_file, index=False)
+    try:
+        df = pd.DataFrame(results)
+        df.to_excel(excel_file, index=False)
+    except Exception as final_save_error:
+        logging.error(f"Error during final save: {str(final_save_error)}")
     
     return {
         "total_images": total_images,
@@ -254,7 +337,7 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
 
 def process_zip_file(zip_path, output_dir, subject, audience):
     """
-    Process a zip file containing images.
+    Process a zip file containing images with improved memory management.
     
     Args:
         zip_path: Path to the zip file
@@ -273,6 +356,8 @@ def process_zip_file(zip_path, output_dir, subject, audience):
     logging.info(f"Extracting zip file: {zip_path}")
     image_paths = extract_zip(zip_path, extract_dir)
     
-    # Process the extracted images
+    # Process the extracted images with smaller batch size for memory efficiency
     logging.info(f"Found {len(image_paths)} images in zip file")
-    return process_individual_images(image_paths, output_dir, subject, audience)
+    
+    # Use a smaller batch size (1) to avoid memory issues
+    return process_individual_images(image_paths, output_dir, subject, audience, batch_size=1)
