@@ -34,19 +34,13 @@ def extract_zip(zip_path, extract_dir):
 def generate_image_description(image_path, subject, audience, max_retries=3):
     """
     Generate a description for an image using OpenAI's API.
-    
-    Args:
-        image_path: Path to the image file
-        subject: The subject area (e.g., Mathematics, Biology)
-        audience: The target audience (e.g., Elementary school students)
-        max_retries: Maximum number of retries on API failure
-        
-    Returns:
-        A description of the image contextual to the subject and audience
     """
     retry_count = 0
     backoff_time = 2  # Initial backoff time in seconds
     temp_path = None
+    
+    # Use a flag to track timeouts
+    timeout_occurred = False
     
     while retry_count < max_retries:
         try:
@@ -178,6 +172,7 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
             except requests.exceptions.ConnectionError:
                 raise ValueError("Connection Error: Could not connect to OpenAI API")
             except requests.exceptions.Timeout:
+                logging.error(f"API request timed out for {os.path.basename(image_path)}")
                 raise ValueError("Timeout Error: The request to OpenAI API timed out")
             except requests.exceptions.RequestException as req_err:
                 raise ValueError(f"Request Error: {req_err}")
