@@ -34,47 +34,51 @@ def extract_zip(zip_path, extract_dir):
 def generate_image_description(image_path, subject, audience, max_retries=3):
     """
     Generate a description for an image using OpenAI's API.
+    
+    Args:
+        image_path: Path to the image file
+        subject: The subject area (e.g., Mathematics, Biology)
+        audience: The target audience (e.g., Elementary school students)
+        max_retries: Maximum number of retries on API failure
+        
+    Returns:
+        A description of the image contextual to the subject and audience
     """
     retry_count = 0
     backoff_time = 2  # Initial backoff time in seconds
     temp_path = None
-    
-    # Use a flag to track timeouts
-    timeout_occurred = False
+    format_name = "unknown"
+    width = 0
+    height = 0
     
     while retry_count < max_retries:
         try:
-            # Get basic image info and prepare image
-            img = None
+            # Get basic image info and prepare image - use context manager for auto-closing
+            image_path_to_use = image_path
+            
             try:
-                img = Image.open(image_path)
-                width, height = img.size
-                format_name = img.format
-                
-                # If image is too large, resize it to reduce API payload and memory usage
-                if width * height > 4000000:  # 4 million pixels
-                    factor = (width * height / 4000000) ** 0.5
-                    new_width = int(width / factor)
-                    new_height = int(height / factor)
+                # Use context manager to ensure image is properly closed
+                with Image.open(image_path) as img:
+                    width, height = img.size
+                    format_name = img.format or "unknown"
                     
-                    # Create a new image instead of modifying the original to avoid memory issues
-                    resized_img = img.resize((new_width, new_height))
-                    img.close()
-                    
-                    # Save to a temporary file
-                    temp_path = f"{os.path.splitext(image_path)[0]}_resized.jpg"
-                    resized_img.save(temp_path, format="JPEG", quality=80)
-                    resized_img.close()
-                    
-                    image_path_to_use = temp_path
-                    format_name = "JPEG"
-                else:
-                    image_path_to_use = image_path
-                    if img:
-                        img.close()
+                    # If image is too large, resize it to reduce API payload and memory usage
+                    if width * height > 4000000:  # 4 million pixels
+                        factor = (width * height / 4000000) ** 0.5
+                        new_width = int(width / factor)
+                        new_height = int(height / factor)
+                        
+                        # Create a new image inside this context - will be auto-closed
+                        resized_img = img.resize((new_width, new_height))
+                        
+                        # Save to a temporary file
+                        temp_path = f"{os.path.splitext(image_path)[0]}_resized.jpg"
+                        resized_img.save(temp_path, format="JPEG", quality=80)
+                        
+                        # Update path to use resized image
+                        image_path_to_use = temp_path
+                        format_name = "jpeg"
             except Exception as img_error:
-                if img:
-                    img.close()
                 logging.error(f"Error processing image {image_path}: {str(img_error)}")
                 raise ValueError(f"Image processing error: {str(img_error)}")
             
@@ -137,7 +141,7 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                     "https://api.openai.com/v1/chat/completions",
                     headers=headers,
                     json=payload,
-                    timeout=60  # 60 second timeout
+                    timeout=90  # 90 second timeout - increased for safety
                 )
                 
                 # Check if the response status code indicates success
@@ -149,7 +153,7 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 if 'error' in response_data:
                     raise ValueError(f"API Error: {response_data['error']['message']}")
                     
-                # Extract and return the description
+                # Extract the description
                 description = response_data['choices'][0]['message']['content']
                 logging.info(f"Generated description for {os.path.basename(image_path)}")
                 
@@ -215,9 +219,6 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
     Returns:
         Dictionary with processing results
     """
-    # Use a smaller batch size for better memory management
-    batch_size = min(batch_size, 3)  # Don't process more than 3 images at once
-    
     results = []
     already_processed = set()
     total_images = 0
@@ -230,29 +231,20 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
     # Check if progress file exists and load it
     if os.path.exists(excel_file):
         try:
-            # Use a more memory-efficient approach to read Excel
-            existing_df = pd.read_excel(excel_file, engine='openpyxl')
-            # Only load necessary columns to reduce memory usage
-            filename_col = existing_df.get("Filename", pd.Series())
-            already_processed = set(filename_col.dropna().tolist())
-            
-            # Use a more efficient way to convert to records
+            existing_df = pd.read_excel(excel_file)
             results = existing_df.to_dict('records')
             
+            # Track already processed files
+            for row in results:
+                already_processed.add(row.get("Filename", ""))
+                
             logging.info(f"Loaded {len(results)} existing results from {excel_file}")
-            
-            # Clear DataFrame to free memory
-            del existing_df
-            gc.collect()
         except Exception as e:
             logging.error(f"Error loading existing progress file: {str(e)}")
     
-    # Process images in smaller batches
-    for batch_idx in range(0, len(image_paths), batch_size):
-        batch_end = min(batch_idx + batch_size, len(image_paths))
-        batch_paths = image_paths[batch_idx:batch_end]
-        
-        for image_path in batch_paths:
+    for i, image_path in enumerate(image_paths):
+        # Handle potential encoding issues with filenames
+        try:
             filename = os.path.basename(image_path)
             
             # Skip already processed images
@@ -260,45 +252,21 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
                 logging.info(f"Skipping already processed image: {filename}")
                 continue
                 
+            # Get image dimensions with proper cleanup
+            width, height, format_name = 0, 0, "Unknown"
+            
             try:
-                # Get image dimensions with proper cleanup
-                width, height, format_name = 0, 0, "Unknown"
-                try:
-                    # Use a context manager and close the image immediately after use
-                    with Image.open(image_path) as img:
-                        width, height = img.size
-                        format_name = img.format or "Unknown"
-                        # Force image closure to free memory
-                        img.close()
-                except Exception as img_error:
-                    logging.error(f"Error reading image {image_path}: {str(img_error)}")
+                # Use context manager for auto-closing
+                with Image.open(image_path) as img:
+                    width, height = img.size
+                    format_name = img.format or "Unknown"
+            except Exception as img_error:
+                logging.error(f"Error reading image {image_path}: {str(img_error)}")
+                # Continue processing with default values
                 
-                # Add timeout handling for description generation
-                description = None
-                try:
-                    # Set a timeout for description generation
-                    import signal
-                    
-                    def timeout_handler(signum, frame):
-                        raise TimeoutError("Description generation timed out")
-                    
-                    # Set 60-second timeout for each image
-                    signal.signal(signal.SIGALRM, timeout_handler)
-                    signal.alarm(60)
-                    
-                    # Generate the description
-                    description = generate_image_description(image_path, subject, audience)
-                    
-                    # Cancel the alarm
-                    signal.alarm(0)
-                    
-                    logging.info(f"Generated description for {filename}")
-                except TimeoutError:
-                    logging.error(f"Description generation timed out for {filename}")
-                    description = "Error: Description generation timed out"
-                except Exception as desc_error:
-                    logging.error(f"Error generating description for {filename}: {str(desc_error)}")
-                    description = f"Error: {str(desc_error)}"
+            try:
+                # Generate the description
+                description = generate_image_description(image_path, subject, audience)
                 
                 # Add to results
                 results.append({
@@ -315,62 +283,85 @@ def process_individual_images(image_paths, output_dir, subject, audience, batch_
                 total_images += 1
                 already_processed.add(filename)
                 
-                # Save progress after each image for reliability
-                try:
-                    # Use a more efficient way to save Excel
-                    temp_excel = os.path.join(output_dir, "temp_descriptions.xlsx")
-                    pd.DataFrame(results).to_excel(temp_excel, index=False, engine='openpyxl')
-                    
-                    # Rename temp file to final file after successful save
-                    if os.path.exists(excel_file):
-                        os.remove(excel_file)
-                    os.rename(temp_excel, excel_file)
-                    
-                    logging.info(f"Progress saved: {total_images}/{len(image_paths)} images processed")
-                except Exception as save_error:
-                    logging.error(f"Error saving progress: {str(save_error)}")
+            except Exception as desc_error:
+                logging.error(f"Error generating description for {filename}: {str(desc_error)}")
                 
-                # Force garbage collection after each image
-                gc.collect()
-                
-            except Exception as e:
-                logging.error(f"Error processing {image_path}: {str(e)}")
-                logging.error(traceback.format_exc())
-                
+                # Add error entry to results
                 results.append({
                     "Filename": filename,
-                    "Format": "Error",
-                    "Width": 0,
-                    "Height": 0,
+                    "Format": format_name,
+                    "Width": width, 
+                    "Height": height,
                     "Subject": subject,
                     "Audience": audience,
-                    "Description": f"Error: {str(e)}",
+                    "Description": f"Error generating description: {str(desc_error)}",
                     "Generated At": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 })
+                already_processed.add(filename)
                 
-                # Force garbage collection after error
-                gc.collect()
-        
-        # Force garbage collection after each batch and sleep briefly
-        # This gives the system time to reclaim memory
-        gc.collect()
-        time.sleep(1)
+            # Save progress after each batch or after processing an image that had errors
+            if (i + 1) % batch_size == 0 or i == len(image_paths) - 1:
+                save_progress_to_excel(results, excel_file)
+                logging.info(f"Progress saved: {len(already_processed)}/{len(image_paths)} images processed")
+            
+            # Force garbage collection after each image
+            gc.collect()
+            
+        except Exception as e:
+            logging.error(f"Critical error processing image path {i}: {str(e)}")
+            logging.error(traceback.format_exc())
+            
+            # Try to get filename even in error cases
+            try:
+                filename = os.path.basename(image_path)
+            except:
+                filename = f"unknown_file_{i}"
+                
+            # Add error to results
+            results.append({
+                "Filename": filename,
+                "Format": "Error",
+                "Width": 0,
+                "Height": 0,
+                "Subject": subject,
+                "Audience": audience,
+                "Description": f"Critical error: {str(e)}",
+                "Generated At": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            })
+            
+            # Save progress after critical error
+            save_progress_to_excel(results, excel_file)
+            
+            # Force garbage collection after error
+            gc.collect()
     
     # Final save
-    try:
-        temp_excel = os.path.join(output_dir, "temp_descriptions.xlsx")
-        pd.DataFrame(results).to_excel(temp_excel, index=False, engine='openpyxl')
-        
-        if os.path.exists(excel_file):
-            os.remove(excel_file)
-        os.rename(temp_excel, excel_file)
-    except Exception as final_save_error:
-        logging.error(f"Error during final save: {str(final_save_error)}")
+    save_progress_to_excel(results, excel_file)
     
     return {
         "total_images": total_images,
         "excel_file": excel_file
     }
+
+def save_progress_to_excel(results, excel_file):
+    """Helper function to safely save progress to Excel file"""
+    for attempt in range(3):  # Try up to 3 times
+        try:
+            pd.DataFrame(results).to_excel(excel_file, index=False)
+            return  # Success, exit function
+        except Exception as save_error:
+            logging.error(f"Save attempt {attempt+1} failed: {str(save_error)}")
+            time.sleep(1)  # Wait a bit before retrying
+            
+            if attempt == 1:  # On second attempt, try alternative method
+                try:
+                    with pd.ExcelWriter(excel_file, engine='openpyxl') as writer:
+                        pd.DataFrame(results).to_excel(writer, index=False)
+                    return  # Success with alternative method
+                except Exception as alt_error:
+                    logging.error(f"Alternative save method failed: {str(alt_error)}")
+    
+    logging.error("All attempts to save progress failed")
 
 def process_zip_file(zip_path, output_dir, subject, audience):
     """
