@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Image Description Generator</title>
+</head>
+<body>
+    <h2>Upload Zip of Images</h2>
+    <form action="/upload" method="post" enctype="multipart/form-data">
+        <label for="subject">Subject:</label>
+        <input type="text" id="subject" name="subject" required><br><br>
+
+        <label for="audience">Audience:</label>
+        <input type="text" id="audience" name="audience" required><br><br>
+
+        <input type="file" name="zipfile" accept=".zip" required><br><br>
+        <input type="submit" value="Generate Descriptions">
+    </form>
+
+    {% if results %}
+        <h3>Descriptions:</h3>
+        <ul>
+            {% for img, desc in results.items() %}
+                <li><strong>{{ img }}</strong>: {{ desc }}</li>
+            {% endfor %}
+        </ul>
+    {% endif %}
+</body>
+</html>

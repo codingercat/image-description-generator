@@ -110,10 +110,13 @@ def generate_image_description(image_path, subject, audience, max_retries=3):
                 "messages": [
                     {
                         "role": "system", 
-                        "content": f"You are a VI educator, expert at describing images for {audience} (blind students) studying {subject}. "
-                                  f"Provide clear, detailed, and educational descriptions that focus on aspects "
-                                  f"relevant to {subject}. Keep descriptions between 100-150 words. "
-                                  f"Be factual, educational, and appropriate for the audience level."
+                        # "content": f"You are a VI educator, expert at describing images for {audience} (blind students) studying {subject}. "
+                        #           f"Provide clear, detailed, and educational descriptions that focus on aspects "
+                        #           f"relevant to {subject}. Avoid adding irrelevant information like colours, "
+                        #           f"Be factual, educational, and appropriate for the audience level."
+                        "content": f"Generate image description for a blind person, keep it contextual, considering the age and grade of the book."
+                        f"Go from general to specific, be concise and objective and keep tone and language of the description relevant to the grade of the book."
+                        f"Don't include colours and irrelevant information and make it straightforward."
                     },
                     {
                         "role": "user",

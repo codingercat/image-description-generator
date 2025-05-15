@@ -3,11 +3,11 @@ import logging
 import tempfile
 import uuid
 from pathlib import Path
-from flask import Flask, request, jsonify, send_file
+from flask import Flask, request, jsonify, send_file, render_template
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
 # Import our image processing module
-from image_processor import process_zip_file, process_individual_images
+from image_processor import process_zip_file, process_individual_images, extract_zip, generate_image_description
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -20,13 +20,15 @@ logging.basicConfig(
 
 # Create Flask app
 app = Flask(__name__)
+UPLOAD_FOLDER = "uploads"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 # Configure CORS to allow requests from any origin
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 @app.route('/', methods=['GET'])
 def index():
-    return 'Flask app is running!'
+    return render_template('index.html')
 
 # Ensure CORS headers are properly set on all responses
 @app.after_request
@@ -206,6 +208,30 @@ def get_job_status(job_id):
         return jsonify({
             'error': f'Error checking job status: {str(e)}'
         }), 500
+
+@app.route('/upload', methods=['POST'])
+def upload():
+    zip_file = request.files.get('zipfile')
+    subject = request.form.get('subject', 'Mathematics')
+    audience = request.form.get('audience', 'school students')
+
+    if not zip_file:
+        return "No file uploaded", 400
+
+    zip_path = os.path.join(UPLOAD_FOLDER, zip_file.filename)
+    zip_file.save(zip_path)
+
+    image_paths = extract_zip(zip_path, UPLOAD_FOLDER)
+    results = {}
+
+    for img_path in image_paths:
+        try:
+            description = generate_image_description(img_path, subject, audience)
+            results[os.path.basename(img_path)] = description
+        except Exception as e:
+            results[os.path.basename(img_path)] = f"Error: {str(e)}"
+
+    return render_template('index.html', results=results)
 
 if __name__ == '__main__':
     app.run(debug=True, host='0.0.0.0', port=5000)
